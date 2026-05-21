@@ -614,6 +614,63 @@ def edge_fill_segmentation(gray: np.ndarray) -> np.ndarray:
     return mask
 
 
+def kmeans_segmentation(rgb: np.ndarray, k: int = 3) -> np.ndarray:
+    """
+    Segment garment using K-means color clustering.
+
+    This clusters pixels by color, then chooses the cluster whose shape
+    looks most like the main garment.
+    """
+    h, w = rgb.shape[:2]
+
+    # Convert to LAB because LAB separates brightness/color more naturally
+    # than raw RGB.
+    lab = cv2.cvtColor(rgb.astype(np.uint8), cv2.COLOR_RGB2LAB)
+
+    pixels = lab.reshape((-1, 3)).astype(np.float32)
+
+    criteria = (
+        cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER,
+        20,
+        1.0,
+    )
+
+    _, labels, centers = cv2.kmeans(
+        pixels,
+        k,
+        None,
+        criteria,
+        5,
+        cv2.KMEANS_PP_CENTERS,
+    )
+
+    labels = labels.reshape((h, w))
+
+    best_mask = None
+    best_score = -1
+
+    edges = canny_edges(cv2.cvtColor(rgb.astype(np.uint8), cv2.COLOR_RGB2GRAY))
+
+    for cluster_id in range(k):
+        mask = np.zeros((h, w), dtype=np.uint8)
+        mask[labels == cluster_id] = 255
+
+        mask = clean_mask(mask)
+        mask = keep_best_garment_component(mask)
+        mask = smooth_mask_contour(mask)
+
+        score = score_mask(mask, edges)
+
+        if score > best_score:
+            best_score = score
+            best_mask = mask
+
+    if best_mask is None:
+        best_mask = np.zeros((h, w), dtype=np.uint8)
+
+    return best_mask
+
+
 def mask_boundary(mask: np.ndarray) -> np.ndarray:
     """
     Get the boundary pixels of a binary mask.
@@ -792,62 +849,191 @@ def prepare_candidate_mask(mask: np.ndarray) -> np.ndarray:
     return mask
 
 
+def mask_quality_metrics(mask: np.ndarray, edges: np.ndarray) -> dict[str, float]:
+    """
+    Compute interpretable quality metrics for a candidate garment mask.
+
+    Instead of combining everything into one fragile weighted score,
+    we use these metrics to reject bad masks and choose among usable ones.
+    """
+    mask = (mask > 0).astype(np.uint8) * 255
+    contour = get_largest_contour(mask)
+
+    if contour is None:
+        return {
+            "valid": 0.0,
+            "area_fraction": 0.0,
+            "width_fraction": 0.0,
+            "height_fraction": 0.0,
+            "centrality": 0.0,
+            "border_contact": 1.0,
+            "edge_agreement": 0.0,
+            "fill_ratio": 0.0,
+        }
+
+    h_img, w_img = mask.shape
+    image_area = h_img * w_img
+
+    area = cv2.contourArea(contour)
+    area_fraction = area / image_area
+
+    x, y, w, h = cv2.boundingRect(contour)
+    width_fraction = w / w_img
+    height_fraction = h / h_img
+
+    bbox_area = w * h
+    fill_ratio = area / bbox_area if bbox_area > 0 else 0.0
+
+    moments = cv2.moments(contour)
+    if moments["m00"] != 0:
+        cx = moments["m10"] / moments["m00"]
+        cy = moments["m01"] / moments["m00"]
+    else:
+        cx = x + w / 2
+        cy = y + h / 2
+
+    center_x = w_img / 2
+    center_y = h_img / 2
+
+    max_dist = np.sqrt(center_x ** 2 + center_y ** 2)
+    dist = np.sqrt((cx - center_x) ** 2 + (cy - center_y) ** 2)
+    centrality = 1.0 - (dist / max_dist)
+
+    border_contact = count_border_contact(mask)
+    edge_agreement = edge_agreement_score(mask, edges)
+
+    # Basic validity test.
+    # This rejects masks that are obviously too small, too huge,
+    # too off-center, or leaking into the border.
+    valid = (
+        area_fraction >= 0.025
+        and area_fraction <= 0.80
+        and width_fraction >= 0.12
+        and height_fraction >= 0.20
+        and centrality >= 0.35
+        and border_contact <= 0.20
+    )
+
+    return {
+        "valid": float(valid),
+        "area_fraction": float(area_fraction),
+        "width_fraction": float(width_fraction),
+        "height_fraction": float(height_fraction),
+        "centrality": float(centrality),
+        "border_contact": float(border_contact),
+        "edge_agreement": float(edge_agreement),
+        "fill_ratio": float(fill_ratio),
+    }
+
+
 def hybrid_segmentation(rgb: np.ndarray, gray: np.ndarray, verbose: bool = True) -> np.ndarray:
     """
-    Try multiple segmentation methods and automatically choose the best mask.
+    Hybrid segmentation for the clothing project.
 
-    Since our project focuses on silhouette, edge_fill gets priority when its
-    score is close to the best score. This avoids choosing a larger but less
-    visually accurate GrabCut mask when edge_fill better follows the clothing
-    boundary.
+    This method:
+    1. tries threshold, GrabCut, edge-fill, and K-means,
+    2. computes interpretable quality metrics,
+    3. rejects clearly bad masks,
+    4. prefers edge-fill when it is genuinely usable because our project
+       cares most about silhouette,
+    5. otherwise chooses the cleanest valid candidate.
     """
     edges = canny_edges(gray)
 
     raw_candidates = {
+        "edge_fill": edge_fill_segmentation(gray),
+        "kmeans": kmeans_segmentation(rgb),
         "threshold": threshold_segmentation(gray),
         "grabcut": grabcut_segmentation(rgb),
-        "edge_fill": edge_fill_segmentation(gray),
     }
 
     prepared_candidates = {}
-    scores = {}
+    metrics = {}
 
     if verbose:
-        print("\nHybrid segmentation scores:")
+        print("\nHybrid segmentation diagnostics:")
 
     for name, raw_mask in raw_candidates.items():
         candidate_mask = prepare_candidate_mask(raw_mask)
-        candidate_score = score_mask(candidate_mask, edges)
-
         prepared_candidates[name] = candidate_mask
-        scores[name] = candidate_score
+        metrics[name] = mask_quality_metrics(candidate_mask, edges)
 
         if verbose:
-            print(f"  {name}: {candidate_score:.4f}")
+            m = metrics[name]
+            print(
+                f"  {name}: "
+                f"valid={m['valid']:.0f}, "
+                f"area={m['area_fraction']:.3f}, "
+                f"width={m['width_fraction']:.3f}, "
+                f"height={m['height_fraction']:.3f}, "
+                f"center={m['centrality']:.3f}, "
+                f"border={m['border_contact']:.3f}, "
+                f"edge={m['edge_agreement']:.3f}, "
+                f"fill={m['fill_ratio']:.3f}"
+            )
 
-    # Standard best method by score.
-    best_name = max(scores, key=scores.get)
-    best_score = scores[best_name]
+    valid_methods = [
+        name for name, m in metrics.items()
+        if m["valid"] == 1.0
+    ]
 
-    # Silhouette-aware tie-breaker:
-    # If edge_fill is close to the best method, prefer edge_fill.
-    # This is because our downstream task depends on garment outline.
-    edge_fill_score = scores.get("edge_fill", -1.0)
+    # If nothing passes validity, fall back to the least-bad candidate.
+    if len(valid_methods) == 0:
+        selected_name = max(
+            metrics,
+            key=lambda name: (
+                metrics[name]["centrality"]
+                + metrics[name]["height_fraction"]
+                + metrics[name]["width_fraction"]
+                + metrics[name]["edge_agreement"]
+                - metrics[name]["border_contact"]
+            ),
+        )
 
-    if edge_fill_score >= best_score - 0.50:
-        best_name = "edge_fill"
+    else:
+        # Best edge agreement among valid methods.
+        best_edge = max(metrics[name]["edge_agreement"] for name in valid_methods)
 
-    best_mask = prepared_candidates[best_name]
+        edge_fill_is_good = (
+            "edge_fill" in valid_methods
+            and metrics["edge_fill"]["area_fraction"] <= 0.55
+            and metrics["edge_fill"]["border_contact"] <= 0.15
+            and metrics["edge_fill"]["edge_agreement"] >= best_edge - 0.10
+        )
+
+        # Project-level rule:
+        # If edge-fill is usable and close to the best boundary alignment,
+        # choose it because silhouette quality matters most.
+        if edge_fill_is_good:
+            selected_name = "edge_fill"
+
+        else:
+            # Otherwise, choose the valid method with the cleanest mask.
+            # This favors strong boundary agreement, low border leakage,
+            # good centrality, and meaningful garment size.
+            selected_name = max(
+                valid_methods,
+                key=lambda name: (
+                    metrics[name]["edge_agreement"],
+                    -metrics[name]["border_contact"],
+                    metrics[name]["centrality"],
+                    metrics[name]["height_fraction"],
+                    metrics[name]["width_fraction"],
+                    metrics[name]["area_fraction"],
+                ),
+            )
 
     if verbose:
-        print(f"Selected method: {best_name}\n")
+        print(f"Selected method: {selected_name}\n")
 
-    # Final cleanup after selection.
-    best_mask = keep_best_garment_component(best_mask)
-    best_mask = remove_thin_top_protrusion(best_mask)
-    best_mask = smooth_mask_contour(best_mask)
+    final_mask = prepared_candidates[selected_name]
 
-    return best_mask
+    # Final cleanup after choosing the method.
+    final_mask = keep_best_garment_component(final_mask)
+    final_mask = remove_thin_top_protrusion(final_mask)
+    final_mask = smooth_mask_contour(final_mask)
+
+    return final_mask
 
 
 # Main Phase 2 pipeline
@@ -891,9 +1077,11 @@ def segment_garment(image_path: str, method: str = "hybrid") -> dict[str, np.nda
         mask = grabcut_segmentation(rgb)
     elif method == "threshold":
         mask = threshold_segmentation(gray)
+    elif method == "kmeans":
+        mask = kmeans_segmentation(rgb)
     else:
         raise ValueError(
-            "method must be 'hybrid', 'edge_fill', 'grabcut', or 'threshold'"
+            "method must be 'hybrid', 'edge_fill', 'kmeans', 'grabcut', or 'threshold'"
         )
 
     edges = canny_edges(gray)
@@ -1024,7 +1212,7 @@ def parse_args() -> argparse.Namespace:
 
     parser.add_argument(
         "--method",
-        choices=["hybrid", "edge_fill", "grabcut", "threshold"],
+        choices=["hybrid", "edge_fill", "grabcut", "threshold", "kmeans"],
         default="hybrid",
         help="Segmentation method to use. Default: hybrid.",
     )
