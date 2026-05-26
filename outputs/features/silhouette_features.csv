@@ -1,0 +1,2 @@
+image_path,contour_area_fraction,bbox_aspect_ratio,solidity,width_taper_ratio,edge_density_upper,edge_density_lower,edge_density_ratio,width_slice_0.10,width_slice_0.25,width_slice_0.50,width_slice_0.75,width_slice_0.90
+test_images/sample2.jpg,0.3358917236328125,0.5601851851851852,0.9347346072186836,1.3218390804597702,0.019472046572317575,0.01973790648762336,0.9865304906843847,0.7310924369747899,0.865546218487395,0.8991596638655462,1.0,0.9663865546218487

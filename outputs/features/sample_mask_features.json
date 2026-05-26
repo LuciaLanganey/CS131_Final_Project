@@ -1,0 +1,29 @@
+{
+  "valid": 1.0,
+  "contour_area": 19484.5,
+  "contour_area_fraction": 0.29730987548828125,
+  "bbox_aspect_ratio": 0.8268156424581006,
+  "bbox_width_fraction": 0.578125,
+  "bbox_height_fraction": 0.69921875,
+  "solidity": 0.8961893153646252,
+  "centroid_x_norm": 0.5037440617862917,
+  "centroid_y_norm": 0.549045094337807,
+  "width_profile": [
+    0.8518518518518519,
+    1.0,
+    0.7481481481481481,
+    0.762962962962963,
+    0.7481481481481481
+  ],
+  "width_profile_slices": [
+    0.1,
+    0.25,
+    0.5,
+    0.75,
+    0.9
+  ],
+  "width_taper_ratio": 0.8782608695652173,
+  "edge_density_upper": 0.013865779256794232,
+  "edge_density_lower": 0.018557853549468976,
+  "edge_density_ratio": 0.7471650328435205
+}
