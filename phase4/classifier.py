@@ -169,7 +169,6 @@ def train_classifiers(X, y_encoded):
                 f"for a stratified split. n_samples={n_samples}, n_test={n_test}, "
                 f"n_classes={n_classes}, class_counts={class_counts.tolist()}"
             )
-            
 
         X_train, X_test, y_train, y_test = train_test_split(
             X,
