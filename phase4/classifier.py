@@ -24,7 +24,7 @@ from sklearn.preprocessing import StandardScaler
 def load_labels(csv_path):
     """Load clothing image labels from a CSV file."""
     df = pd.read_csv(csv_path)
-    df = df[["filename", "pattern", "sleeve", "silhouette", "season"]]
+    df = df[["filename", "garment_type", "pattern", "sleeve", "silhouette", "season"]]
 
     print("Loaded", len(df), "samples")
     return df
@@ -66,6 +66,7 @@ def build_feature_matrix(df, image_dir="test_images/"):
     sleeve_labels = []
     silhouette_labels = []
     season_labels = []
+    garment_type_labels = []
 
     for i in range(len(df)):
         row = df.iloc[i]
@@ -80,6 +81,7 @@ def build_feature_matrix(df, image_dir="test_images/"):
         sleeve_labels.append(row["sleeve"])
         silhouette_labels.append(row["silhouette"])
         season_labels.append(row["season"])
+        garment_type_labels.append(row["garment_type"])
 
     X = np.array(X_rows)
     y = {
@@ -87,6 +89,7 @@ def build_feature_matrix(df, image_dir="test_images/"):
         "sleeve": np.array(sleeve_labels),
         "silhouette": np.array(silhouette_labels),
         "season": np.array(season_labels),
+        "garment_type": np.array(garment_type_labels),
     }
 
     print("Final feature matrix shape:", X.shape)
@@ -99,7 +102,7 @@ def encode_labels(y_dict):
 
     Args:
         y_dict: Dictionary mapping label names to numpy arrays of string labels.
-            Expected keys are pattern, sleeve, silhouette, and season.
+            Expected keys are pattern, sleeve, silhouette, season, and garment_type.
 
     Returns:
         y_encoded: Dictionary mapping each label name to a numpy array of
@@ -291,6 +294,9 @@ if __name__ == "__main__":
 
     print("\nseason counts:")
     print(pd.Series(y["season"]).value_counts())
+
+    print("\ngarment_type counts:")
+    print(pd.Series(y["garment_type"]).value_counts())
 
     y_encoded, encoders = encode_labels(y)
     best_classifiers, results = train_classifiers(X, y_encoded)

@@ -11,6 +11,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from phase4.classifier import build_feature_matrix, load_labels
 
+LABELS = ["pattern", "sleeve", "silhouette", "season", "garment_type"]
+
 
 def get_test_data(X, y):
     """Get the same test split that classifier.py uses during training."""
@@ -46,7 +48,7 @@ def load_models(model_dir="outputs/classification/models/"):
     classifiers = {}
     encoders = {}
 
-    for label in ["pattern", "sleeve", "silhouette", "season"]:
+    for label in LABELS:
         clf_path = os.path.join(model_dir, label + "_clf.pkl")
         enc_path = os.path.join(model_dir, label + "_enc.pkl")
 
@@ -67,7 +69,7 @@ def evaluate_all(classifiers, encoders, X, y_encoded):
 
     summary = {}
 
-    for label in ["pattern", "sleeve", "silhouette", "season"]:
+    for label in LABELS:
         clf = classifiers[label]
         encoder = encoders[label]
 
@@ -135,17 +137,17 @@ def evaluate_all(classifiers, encoders, X, y_encoded):
 def print_report(summary):
     """Print a summary table of evaluation results."""
     print("\nEvaluation Summary")
-    print("Label        | Accuracy")
-    print("-------------|----------")
-    for label in ["pattern", "sleeve", "silhouette", "season"]:
+    print("Label          | Accuracy")
+    print("---------------|----------")
+    for label in LABELS:
         acc = summary[label]["accuracy"]
-        print(f"{label:<12} | {acc:.2f}")
+        print(f"{label:<14} | {acc:.2f}")
 
 
 if __name__ == "__main__":
     df = load_labels("data/labels.csv")
 
-    for col in ["pattern", "sleeve", "silhouette", "season"]:
+    for col in ["pattern", "sleeve", "silhouette", "season", "garment_type"]:
         df[col] = df[col].astype(str).str.strip()
 
     X, y = build_feature_matrix(df)
@@ -156,7 +158,7 @@ if __name__ == "__main__":
     classifiers, encoders = load_models()
 
     y_encoded = {}
-    for label in ["pattern", "sleeve", "silhouette", "season"]:
+    for label in LABELS:
         y_encoded[label] = encoders[label].transform(y[label])
 
     summary = evaluate_all(classifiers, encoders, X, y_encoded)
