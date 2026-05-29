@@ -1,1 +1,14 @@
 filename,pattern,sleeve,silhouette,season
+whiteshirt.jpg,solid,short,loose,summer
+blackdress.jpg,solid,sleeveless,fitted,summer
+polkadotdress.jpg,polka_dot,short,flared,summer
+polkadottop.jpeg,polka_dot,short,fitted,summer
+stripeshirt.jpg,striped,long,loose,transitional
+stripeshirt2.jpg,striped,short,loose,summer 
+plainsweater.jpg,solid,long,loose ,winter
+stripesweater.jpeg,striped,long,fitted,winter 
+floraltop.jpg,floral,long,flared,transitional
+solidshirt.jpeg,solid,long ,loose,winter 
+floraltop2.jpeg,floral,sleeveless,fitted,summer 
+floraldress.jpeg,floral,sleeveless,flared,summer 
+polkadottop2.jpeg,polka_dot,long,loose,transitional

@@ -9,6 +9,17 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from phase3 import pattern_features
 from phase3.features import extract_silhouette_features, segment_garment
 
+import joblib
+
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import accuracy_score
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import LabelEncoder
+from sklearn.svm import SVC
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import StandardScaler
+
 
 def load_labels(csv_path):
     """Load clothing image labels from a CSV file."""
@@ -80,11 +91,191 @@ def build_feature_matrix(df, image_dir="test_images/"):
 
     print("Final feature matrix shape:", X.shape)
     return X, y
+    
+    
+def encode_labels(y_dict):
+    """
+    Encode string labels into integer labels for classifier training.
+
+    Args:
+        y_dict: Dictionary mapping label names to numpy arrays of string labels.
+            Expected keys are pattern, sleeve, silhouette, and season.
+
+    Returns:
+        y_encoded: Dictionary mapping each label name to a numpy array of
+            encoded integer labels.
+        encoders: Dictionary mapping each label name to its fitted LabelEncoder.
+    """
+    y_encoded = {}
+    encoders = {}
+
+    for label_name, labels in y_dict.items():
+        encoder = LabelEncoder()
+        encoded_labels = encoder.fit_transform(labels)
+
+        y_encoded[label_name] = encoded_labels
+        encoders[label_name] = encoder
+
+        print(f"{label_name} classes:", list(encoder.classes_))
+
+    return y_encoded, encoders
+
+
+def train_classifiers(X, y_encoded):
+    """
+    Train and select the best classifier for each clothing label.
+
+    For each label type, this function trains three classifiers:
+    Random Forest, SVM, and Logistic Regression. The model with the highest
+    validation accuracy is selected as the best model for that label.
+
+    Args:
+        X: Numpy array of shape (n_samples, n_features), containing extracted
+            image features.
+        y_encoded: Dictionary mapping label names to encoded integer label arrays.
+
+    Returns:
+        best_classifiers: Dictionary mapping each label name to its best fitted
+            classifier.
+        results: Dictionary mapping each label name to a dictionary containing
+            the winning model name, validation accuracy, held-out X_test, and
+            held-out y_test.
+    """
+    best_classifiers = {}
+    results = {}
+
+    for label_name, y in y_encoded.items():
+        print(f"\nTraining classifiers for: {label_name}")
+
+        # Stratify only works if each class has at least 2 samples.
+        unique_classes, class_counts = np.unique(y, return_counts=True)
+        n_classes = len(unique_classes)
+        n_samples = len(y)
+        test_size = 0.2
+        n_test = int(np.ceil(test_size * n_samples))
+
+        can_stratify = (
+            n_classes > 1
+            and np.all(class_counts >= 2)
+            and n_test >= n_classes
+        )
+
+        if can_stratify:
+            stratify_arg = y
+        else:
+            stratify_arg = None
+            print(
+                f"Warning: not using stratify for {label_name} because the dataset is too small "
+                f"for a stratified split. n_samples={n_samples}, n_test={n_test}, "
+                f"n_classes={n_classes}, class_counts={class_counts.tolist()}"
+            )
+            
+
+        X_train, X_test, y_train, y_test = train_test_split(
+            X,
+            y,
+            test_size=0.3,
+            random_state=42,
+            stratify=stratify_arg,
+        )
+
+        candidate_models = {
+            "RandomForest": RandomForestClassifier(
+                n_estimators=100,
+                random_state=42,
+            ),
+            "SVC": make_pipeline(
+                StandardScaler(),
+                SVC(kernel="rbf", random_state=42),
+            ),
+            "LogisticRegression": make_pipeline(
+                StandardScaler(),
+                LogisticRegression(max_iter=5000, random_state=42),
+            ),
+        }
+
+        best_model_name = None
+        best_model = None
+        best_accuracy = -1.0
+
+        for model_name, model in candidate_models.items():
+            try:
+                model.fit(X_train, y_train)
+
+                train_pred = model.predict(X_train)
+                train_accuracy = accuracy_score(y_train, train_pred)
+
+                y_pred = model.predict(X_test)
+                accuracy = accuracy_score(y_test, y_pred)
+
+                print(f"  {model_name} train accuracy: {train_accuracy:.4f}")
+                print(f"  {model_name} validation accuracy: {accuracy:.4f}")
+
+                if accuracy > best_accuracy:
+                    best_accuracy = accuracy
+                    best_model_name = model_name
+                    best_model = model
+
+            except Exception as exc:
+                print(f"  Warning: {model_name} failed for {label_name}: {exc}")
+
+        if best_model is None:
+            print(f"Warning: no classifier could be trained for {label_name}")
+            continue
+
+        best_classifiers[label_name] = best_model
+        results[label_name] = {
+            "best_model": best_model_name,
+            "accuracy": float(best_accuracy),
+            "X_test": X_test,
+            "y_test": y_test,
+        }
+
+        print(
+            f"Best model for {label_name}: "
+            f"{best_model_name} with accuracy {best_accuracy:.4f}"
+        )
+
+    return best_classifiers, results
+
+
+def save_classifiers(
+    best_classifiers,
+    encoders,
+    out_dir="outputs/classification/models/",
+):
+    """
+    Save trained classifiers and label encoders as .pkl files.
+
+    Args:
+        best_classifiers: Dictionary mapping label names to fitted classifiers.
+        encoders: Dictionary mapping label names to fitted LabelEncoders.
+        out_dir: Directory where model and encoder files should be saved.
+
+    Returns:
+        None.
+    """
+    os.makedirs(out_dir, exist_ok=True)
+
+    for label_name, classifier in best_classifiers.items():
+        classifier_path = os.path.join(out_dir, f"{label_name}_clf.pkl")
+        joblib.dump(classifier, classifier_path)
+        print(f"Saved classifier: {classifier_path}")
+
+    for label_name, encoder in encoders.items():
+        encoder_path = os.path.join(out_dir, f"{label_name}_enc.pkl")
+        joblib.dump(encoder, encoder_path)
+        print(f"Saved encoder: {encoder_path}")
 
 
 if __name__ == "__main__":
     df = load_labels("data/labels.csv")
     X, y = build_feature_matrix(df)
+    
+    if len(X) == 0:
+        raise ValueError(
+            "No feature rows were built."
+        )
 
     print("X.shape:", X.shape)
     if len(X) > 0:
@@ -101,3 +292,15 @@ if __name__ == "__main__":
 
     print("\nseason counts:")
     print(pd.Series(y["season"]).value_counts())
+
+    y_encoded, encoders = encode_labels(y)
+    best_classifiers, results = train_classifiers(X, y_encoded)
+    save_classifiers(best_classifiers, encoders)
+
+    print("\nFinal training summary:")
+    for label_name, result in results.items():
+        print(
+            f"{label_name}: "
+            f"{result['best_model']} "
+            f"accuracy={result['accuracy']:.4f}"
+        )
