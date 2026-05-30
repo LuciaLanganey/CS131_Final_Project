@@ -9,7 +9,7 @@ from sklearn.model_selection import train_test_split
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from phase4.classifier import build_feature_matrix, load_labels
+from phase4.classifier import build_feature_matrix, load_labels, sleeve_training_mask
 
 LABELS = ["pattern", "sleeve", "silhouette", "season", "garment_type"]
 
@@ -62,7 +62,7 @@ def load_models(model_dir="outputs/classification/models/"):
     return classifiers, encoders
 
 
-def evaluate_all(classifiers, encoders, X, y_encoded):
+def evaluate_all(classifiers, encoders, X, y_encoded, garment_types=None):
     """Evaluate each saved classifier on test data."""
     out_dir = "outputs/classification/confusion_matrices/"
     os.makedirs(out_dir, exist_ok=True)
@@ -73,7 +73,16 @@ def evaluate_all(classifiers, encoders, X, y_encoded):
         clf = classifiers[label]
         encoder = encoders[label]
 
-        X_test, y_test = get_test_data(X, y_encoded[label])
+        if label == "sleeve" and garment_types is not None:
+            mask = sleeve_training_mask(garment_types)
+            X_use = X[mask]
+            y_use = y_encoded[label][mask]
+            print("\nEvaluating sleeve on", len(y_use), "non-pants samples")
+        else:
+            X_use = X
+            y_use = y_encoded[label]
+
+        X_test, y_test = get_test_data(X_use, y_use)
 
         y_pred = clf.predict(X_test)
         acc = accuracy_score(y_test, y_pred)
@@ -161,5 +170,7 @@ if __name__ == "__main__":
     for label in LABELS:
         y_encoded[label] = encoders[label].transform(y[label])
 
-    summary = evaluate_all(classifiers, encoders, X, y_encoded)
+    summary = evaluate_all(
+        classifiers, encoders, X, y_encoded, garment_types=y["garment_type"]
+    )
     print_report(summary)

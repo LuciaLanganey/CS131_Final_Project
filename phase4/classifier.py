@@ -94,9 +94,15 @@ def build_feature_matrix(df, image_dir="test_images/"):
 
     print("Final feature matrix shape:", X.shape)
     return X, y
+
+
+def sleeve_training_mask(garment_types):
+    """Return True for rows that should be used when training sleeve labels."""
+    garment_types = np.array(garment_types)
+    return garment_types != "pants"
+
     
-    
-def encode_labels(y_dict):
+def encode_labels(y_dict, garment_types=None):
     """
     Encode string labels into integer labels for classifier training.
 
@@ -114,17 +120,28 @@ def encode_labels(y_dict):
 
     for label_name, labels in y_dict.items():
         encoder = LabelEncoder()
-        encoded_labels = encoder.fit_transform(labels)
+
+        if label_name == "sleeve" and garment_types is not None:
+            mask = sleeve_training_mask(garment_types)
+            encoder.fit(labels[mask])
+            encoded_labels = np.full(len(labels), -1, dtype=int)
+            encoded_labels[mask] = encoder.transform(labels[mask])
+            print(
+                f"{label_name} classes:",
+                list(encoder.classes_),
+                f"(trained on {mask.sum()} non-pants samples)",
+            )
+        else:
+            encoded_labels = encoder.fit_transform(labels)
+            print(f"{label_name} classes:", list(encoder.classes_))
 
         y_encoded[label_name] = encoded_labels
         encoders[label_name] = encoder
 
-        print(f"{label_name} classes:", list(encoder.classes_))
-
     return y_encoded, encoders
 
 
-def train_classifiers(X, y_encoded):
+def train_classifiers(X, y_encoded, garment_types=None):
     """
     Train and select the best classifier for each clothing label.
 
@@ -150,10 +167,19 @@ def train_classifiers(X, y_encoded):
     for label_name, y in y_encoded.items():
         print(f"\nTraining classifiers for: {label_name}")
 
+        X_use = X
+        y_use = y
+
+        if label_name == "sleeve" and garment_types is not None:
+            mask = sleeve_training_mask(garment_types)
+            X_use = X[mask]
+            y_use = y[mask]
+            print(f"  Skipping pants: training sleeve on {len(y_use)} samples")
+
         # Stratify only works if each class has at least 2 samples.
-        unique_classes, class_counts = np.unique(y, return_counts=True)
+        unique_classes, class_counts = np.unique(y_use, return_counts=True)
         n_classes = len(unique_classes)
-        n_samples = len(y)
+        n_samples = len(y_use)
         test_size = 0.2
         n_test = int(np.ceil(test_size * n_samples))
 
@@ -164,7 +190,7 @@ def train_classifiers(X, y_encoded):
         )
 
         if can_stratify:
-            stratify_arg = y
+            stratify_arg = y_use
         else:
             stratify_arg = None
             print(
@@ -174,8 +200,8 @@ def train_classifiers(X, y_encoded):
             )
 
         X_train, X_test, y_train, y_test = train_test_split(
-            X,
-            y,
+            X_use,
+            y_use,
             test_size=0.3,
             random_state=42,
             stratify=stratify_arg,
@@ -286,8 +312,9 @@ if __name__ == "__main__":
     print("\npattern counts:")
     print(pd.Series(y["pattern"]).value_counts())
 
-    print("\nsleeve counts:")
-    print(pd.Series(y["sleeve"]).value_counts())
+    print("\nsleeve counts (non-pants only):")
+    sleeve_mask = sleeve_training_mask(y["garment_type"])
+    print(pd.Series(y["sleeve"][sleeve_mask]).value_counts())
 
     print("\nsilhouette counts:")
     print(pd.Series(y["silhouette"]).value_counts())
@@ -298,8 +325,10 @@ if __name__ == "__main__":
     print("\ngarment_type counts:")
     print(pd.Series(y["garment_type"]).value_counts())
 
-    y_encoded, encoders = encode_labels(y)
-    best_classifiers, results = train_classifiers(X, y_encoded)
+    y_encoded, encoders = encode_labels(y, garment_types=y["garment_type"])
+    best_classifiers, results = train_classifiers(
+        X, y_encoded, garment_types=y["garment_type"]
+    )
     save_classifiers(best_classifiers, encoders)
 
     print("\nFinal training summary:")
