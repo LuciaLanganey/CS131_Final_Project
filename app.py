@@ -44,23 +44,32 @@ st.set_page_config(
 
 st.title("Clothing Describer")
 st.write(
-    "Upload a photo of a garment to get a natural-language description "
+    "Take or upload a photo of a garment to get a natural-language description "
     "of its pattern, sleeve style, silhouette, season, and type."
 )
 
+camera_photo = st.camera_input(
+    "Take a photo",
+    help="Opens your device camera. Works on most mobile browsers.",
+)
 uploaded = st.file_uploader(
-    "Choose an image",
+    "Or choose an image",
     type=["jpg", "jpeg", "png"],
     help="On mobile, you can take a new photo or pick one from your library.",
 )
 
-if uploaded is not None:
-    st.caption("Visual preview of your uploaded garment.")
-    st.image(uploaded, caption="Uploaded garment photo", use_container_width=True)
+from_camera = camera_photo is not None
+image_source = camera_photo if from_camera else uploaded
 
-    suffix = os.path.splitext(uploaded.name)[1] or ".jpg"
+if image_source is not None:
+    caption = "Photo from camera" if from_camera else "Uploaded garment photo"
+    st.caption("Visual preview of your garment.")
+    st.image(image_source, caption=caption, use_container_width=True)
+
+    filename = getattr(image_source, "name", None) or "photo.jpg"
+    suffix = os.path.splitext(filename)[1] or ".jpg"
     with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
-        tmp.write(uploaded.getvalue())
+        tmp.write(image_source.getvalue())
         image_path = tmp.name
 
     with st.status("Analyzing garment...", expanded=True) as status:
