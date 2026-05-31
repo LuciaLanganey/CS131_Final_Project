@@ -18,6 +18,10 @@ def format_label(label: str) -> str:
     return label.replace("_", " ").title()
 
 
+def render_error(message: str) -> None:
+    st.error(message)
+
+
 def render_results(description: str, predictions: dict) -> None:
     attribute_rows = "".join(
         f"<dt>{html.escape(format_label(label))}</dt>"
@@ -77,9 +81,55 @@ if image_source is not None:
         tmp.write(image_source.getvalue())
         image_path = tmp.name
 
-    with st.status("Analyzing garment...", expanded=True) as status:
-        classifiers, encoders = get_models()
-        description, predictions = describe_image(image_path, classifiers, encoders)
-        status.update(label="Analysis complete", state="complete", expanded=False)
+    analysis_failed = False
+    try:
+        with st.status("Analyzing garment...", expanded=True) as status:
+            try:
+                classifiers, encoders = get_models()
+                description, predictions = describe_image(
+                    image_path, classifiers, encoders
+                )
+                status.update(
+                    label="Analysis complete",
+                    state="complete",
+                    expanded=False,
+                )
+            except FileNotFoundError:
+                status.update(
+                    label="Analysis failed",
+                    state="error",
+                    expanded=True,
+                )
+                render_error(
+                    "Trained models were not found. Run "
+                    "`python3 phase4/classifier.py` first, then reload this page."
+                )
+                analysis_failed = True
+            except ValueError:
+                status.update(
+                    label="Analysis failed",
+                    state="error",
+                    expanded=True,
+                )
+                render_error(
+                    "Could not analyze this image. Try a clearer photo with "
+                    "the garment centered and good lighting."
+                )
+                analysis_failed = True
+            except Exception:
+                status.update(
+                    label="Analysis failed",
+                    state="error",
+                    expanded=True,
+                )
+                render_error(
+                    "Something went wrong while analyzing the image. "
+                    "Please try again with a different photo."
+                )
+                analysis_failed = True
+    finally:
+        if os.path.exists(image_path):
+            os.unlink(image_path)
 
-    render_results(description, predictions)
+    if not analysis_failed:
+        render_results(description, predictions)
