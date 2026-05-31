@@ -9,6 +9,11 @@ import streamlit as st
 from phase4.describe import describe_image, load_models
 
 
+@st.cache_resource
+def get_models():
+    return load_models()
+
+
 def format_label(label: str) -> str:
     return label.replace("_", " ").title()
 
@@ -73,7 +78,7 @@ if image_source is not None:
         image_path = tmp.name
 
     with st.status("Analyzing garment...", expanded=True) as status:
-        classifiers, encoders = load_models()
+        classifiers, encoders = get_models()
         description, predictions = describe_image(image_path, classifiers, encoders)
         status.update(label="Analysis complete", state="complete", expanded=False)
 
