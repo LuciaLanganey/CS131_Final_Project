@@ -96,10 +96,45 @@ def build_feature_matrix(df, image_dir="test_images/"):
     return X, y
 
 
+def clothing_training_mask(garment_types):
+    """
+    Return True for rows that are actual clothing items.
+
+    Args:
+        garment_types: Array of garment type labels.
+
+    Returns:
+        Boolean mask where True means the row is clothing, not other.
+    """
+    garment_types = np.array([str(g).strip().lower() for g in garment_types])
+    return garment_types != "other"
+
+
 def sleeve_training_mask(garment_types):
-    """Return True for rows that should be used when training sleeve labels."""
-    garment_types = np.array(garment_types)
-    return garment_types != "pants"
+    
+    garment_types = np.array([str(g).strip().lower() for g in garment_types])
+    return (garment_types != "pants") & (garment_types != "other")
+
+
+def label_training_mask(label_name, garment_types):
+    """
+    Return the correct training/evaluation mask for a target label.
+
+    Args:
+        label_name: Name of the target label.
+        garment_types: Array of garment type labels.
+
+    Returns:
+        Boolean mask selecting rows that should train/evaluate this target.
+    """
+    if label_name == "garment_type":
+        return np.ones(len(garment_types), dtype=bool)
+
+    if label_name == "sleeve":
+        return sleeve_training_mask(garment_types)
+
+    # Pattern, silhouette, and season only make sense for clothing.
+    return clothing_training_mask(garment_types)
 
     
 def encode_labels(y_dict, garment_types=None):
@@ -109,34 +144,43 @@ def encode_labels(y_dict, garment_types=None):
     Args:
         y_dict: Dictionary mapping label names to numpy arrays of string labels.
             Expected keys are pattern, sleeve, silhouette, season, and garment_type.
+        garment_types: Optional array of garment type labels used to exclude
+            non-applicable rows from certain classifiers.
 
     Returns:
         y_encoded: Dictionary mapping each label name to a numpy array of
-            encoded integer labels.
+            encoded integer labels. Rows excluded from a label's training set
+            are assigned -1.
         encoders: Dictionary mapping each label name to its fitted LabelEncoder.
     """
     y_encoded = {}
     encoders = {}
 
     for label_name, labels in y_dict.items():
+        labels = np.array([str(label).strip() for label in labels])
         encoder = LabelEncoder()
 
-        if label_name == "sleeve" and garment_types is not None:
-            mask = sleeve_training_mask(garment_types)
-            encoder.fit(labels[mask])
-            encoded_labels = np.full(len(labels), -1, dtype=int)
-            encoded_labels[mask] = encoder.transform(labels[mask])
-            print(
-                f"{label_name} classes:",
-                list(encoder.classes_),
-                f"(trained on {mask.sum()} non-pants samples)",
-            )
+        if garment_types is not None:
+            mask = label_training_mask(label_name, garment_types)
         else:
-            encoded_labels = encoder.fit_transform(labels)
-            print(f"{label_name} classes:", list(encoder.classes_))
+            mask = np.ones(len(labels), dtype=bool)
+
+        encoder.fit(labels[mask])
+
+        encoded_labels = np.full(len(labels), -1, dtype=int)
+        encoded_labels[mask] = encoder.transform(labels[mask])
 
         y_encoded[label_name] = encoded_labels
         encoders[label_name] = encoder
+
+        if label_name == "garment_type":
+            print(f"{label_name} classes:", list(encoder.classes_))
+        else:
+            print(
+                f"{label_name} classes:",
+                list(encoder.classes_),
+                f"(trained on {mask.sum()} applicable samples)",
+            )
 
     return y_encoded, encoders
 
@@ -153,6 +197,8 @@ def train_classifiers(X, y_encoded, garment_types=None):
         X: Numpy array of shape (n_samples, n_features), containing extracted
             image features.
         y_encoded: Dictionary mapping label names to encoded integer label arrays.
+        garment_types: Optional array of garment type labels. Used to skip
+            non-applicable rows for some targets.
 
     Returns:
         best_classifiers: Dictionary mapping each label name to its best fitted
@@ -170,18 +216,32 @@ def train_classifiers(X, y_encoded, garment_types=None):
         X_use = X
         y_use = y
 
-        if label_name == "sleeve" and garment_types is not None:
-            mask = sleeve_training_mask(garment_types)
+        if garment_types is not None:
+            mask = label_training_mask(label_name, garment_types)
             X_use = X[mask]
             y_use = y[mask]
-            print(f"  Skipping pants: training sleeve on {len(y_use)} samples")
+
+            if label_name != "garment_type":
+                print(
+                    f"  Training {label_name} on "
+                    f"{len(y_use)} applicable clothing samples"
+                )
+
+        if len(y_use) < 2:
+            print(f"Warning: not enough samples to train {label_name}. Skipping.")
+            continue
 
         # Stratify only works if each class has at least 2 samples.
         unique_classes, class_counts = np.unique(y_use, return_counts=True)
+
+        if len(unique_classes) < 2:
+            print(f"Warning: only one class for {label_name}. Skipping.")
+            continue
+
         n_classes = len(unique_classes)
         n_samples = len(y_use)
-        test_size = 0.2
-        n_test = int(np.ceil(test_size * n_samples))
+        test_size_for_check = 0.3
+        n_test = int(np.ceil(test_size_for_check * n_samples))
 
         can_stratify = (
             n_classes > 1
@@ -194,9 +254,10 @@ def train_classifiers(X, y_encoded, garment_types=None):
         else:
             stratify_arg = None
             print(
-                f"Warning: not using stratify for {label_name} because the dataset is too small "
-                f"for a stratified split. n_samples={n_samples}, n_test={n_test}, "
-                f"n_classes={n_classes}, class_counts={class_counts.tolist()}"
+                f"Warning: not using stratify for {label_name} because the dataset "
+                f"is too small for a stratified split. n_samples={n_samples}, "
+                f"n_test={n_test}, n_classes={n_classes}, "
+                f"class_counts={class_counts.tolist()}"
             )
 
         X_train, X_test, y_train, y_test = train_test_split(
@@ -236,8 +297,11 @@ def train_classifiers(X, y_encoded, garment_types=None):
                 y_pred = model.predict(X_test)
                 accuracy = accuracy_score(y_test, y_pred)
 
-                print(f"  {model_name} train accuracy: {train_accuracy:.4f}")
-                print(f"  {model_name} validation accuracy: {accuracy:.4f}")
+                print(
+                    f"  {model_name}: "
+                    f"train={train_accuracy:.4f}, "
+                    f"validation={accuracy:.4f}"
+                )
 
                 if accuracy > best_accuracy:
                     best_accuracy = accuracy
@@ -309,18 +373,20 @@ if __name__ == "__main__":
     if len(X) > 0:
         print("First row of X:", X[0])
 
-    print("\npattern counts:")
-    print(pd.Series(y["pattern"]).value_counts())
-
-    print("\nsleeve counts (non-pants only):")
+    clothing_mask = clothing_training_mask(y["garment_type"])
     sleeve_mask = sleeve_training_mask(y["garment_type"])
+
+    print("\npattern counts (clothing only):")
+    print(pd.Series(y["pattern"][clothing_mask]).value_counts())
+
+    print("\nsleeve counts (non-pants clothing only):")
     print(pd.Series(y["sleeve"][sleeve_mask]).value_counts())
 
-    print("\nsilhouette counts:")
-    print(pd.Series(y["silhouette"]).value_counts())
+    print("\nsilhouette counts (clothing only):")
+    print(pd.Series(y["silhouette"][clothing_mask]).value_counts())
 
-    print("\nseason counts:")
-    print(pd.Series(y["season"]).value_counts())
+    print("\nseason counts (clothing only):")
+    print(pd.Series(y["season"][clothing_mask]).value_counts())
 
     print("\ngarment_type counts:")
     print(pd.Series(y["garment_type"]).value_counts())

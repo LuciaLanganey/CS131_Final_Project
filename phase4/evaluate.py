@@ -9,7 +9,12 @@ from sklearn.model_selection import train_test_split
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from phase4.classifier import build_feature_matrix, load_labels, sleeve_training_mask
+from phase4.classifier import (
+    build_feature_matrix,
+    load_labels,
+    label_training_mask,
+    encode_labels,
+)
 
 LABELS = ["pattern", "sleeve", "silhouette", "season", "garment_type"]
 
@@ -73,11 +78,13 @@ def evaluate_all(classifiers, encoders, X, y_encoded, garment_types=None):
         clf = classifiers[label]
         encoder = encoders[label]
 
-        if label == "sleeve" and garment_types is not None:
-            mask = sleeve_training_mask(garment_types)
+        if garment_types is not None:
+            mask = label_training_mask(label, garment_types)
             X_use = X[mask]
             y_use = y_encoded[label][mask]
-            print("\nEvaluating sleeve on", len(y_use), "non-pants samples")
+
+            if label != "garment_type":
+                print(f"\nEvaluating {label} on {len(y_use)} applicable clothing samples")
         else:
             X_use = X
             y_use = y_encoded[label]
@@ -165,12 +172,18 @@ if __name__ == "__main__":
         raise ValueError("No feature rows were built.")
 
     classifiers, encoders = load_models()
-
-    y_encoded = {}
-    for label in LABELS:
-        y_encoded[label] = encoders[label].transform(y[label])
+    
+    y_encoded, _ = encode_labels(
+        y,
+        garment_types=y["garment_type"],
+    )
 
     summary = evaluate_all(
-        classifiers, encoders, X, y_encoded, garment_types=y["garment_type"]
+        classifiers,
+        encoders,
+        X,
+        y_encoded,
+        garment_types=y["garment_type"],
     )
+
     print_report(summary)

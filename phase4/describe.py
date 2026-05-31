@@ -91,59 +91,79 @@ def describe_image(image_path, classifiers, encoders):
     """
     Predict clothing attributes for one image and create a description.
 
+    The system first predicts garment_type. If garment_type is "other",
+    it stops and returns a non-clothing message instead of predicting
+    clothing-specific attributes.
+
     Args:
-        image_path: Path to the clothing image.
+        image_path: Path to the input image.
         classifiers: Dictionary mapping label names to trained classifiers.
         encoders: Dictionary mapping label names to fitted LabelEncoders.
 
     Returns:
-        description: Human-readable clothing description.
+        description: Human-readable clothing description or non-clothing message.
         predictions: Dictionary of decoded label predictions.
     """
     features = extract_features_for_image(image_path)
 
     if features is None:
-        raise ValueError(f"Could not extract features from image: {image_path}")
+        return (
+            "Could not identify a clothing item in this image.",
+            {"garment_type": "unknown"},
+        )
 
     features = np.array(features).reshape(1, -1)
 
     predictions = {}
 
-    for label in LABEL_NAMES:
-        classifier = classifiers[label]
-        encoder = encoders[label]
+    # First predict whether this is clothing at all.
+    garment_type_encoded = classifiers["garment_type"].predict(features)
+    garment_type = encoders["garment_type"].inverse_transform(garment_type_encoded)[0]
 
-        encoded_prediction = classifier.predict(features)
-        decoded_prediction = encoder.inverse_transform(encoded_prediction)[0]
+    predictions["garment_type"] = garment_type
+    garment_type_clean = str(garment_type).strip().lower()
 
+    # If the image is not clothing, stop here.
+    if garment_type_clean == "other":
+        description = "Could not identify a clothing item in this image."
+        return description, predictions
+
+    # If it is clothing, predict clothing-specific attributes.
+    for label in ["pattern", "silhouette", "season"]:
+        encoded_prediction = classifiers[label].predict(features)
+        decoded_prediction = encoders[label].inverse_transform(encoded_prediction)[0]
         predictions[label] = decoded_prediction
 
     pattern = predictions["pattern"]
     silhouette = predictions["silhouette"]
     season = predictions["season"]
-    garment_type = predictions["garment_type"]
 
-    garment_type_clean = str(garment_type).strip().lower()
-
+    # Pants can have sleeve='sleeveless' in labels.csv, but we do not include
+    # sleeve in the generated pants description.
     if garment_type_clean == "pants":
         description = (
             f"A {pattern} {silhouette} pair of pants, "
             f"suited for {season} wear."
         )
-    else:
-        sleeve = predictions["sleeve"]
-        sleeve_phrase = format_sleeve_phrase(sleeve)
+        return description, predictions
 
-        if sleeve_phrase:
-            description = (
-                f"A {sleeve_phrase} {pattern} {silhouette} {garment_type}, "
-                f"suited for {season} wear."
-            )
-        else:
-            description = (
-                f"A {pattern} {silhouette} {garment_type}, "
-                f"suited for {season} wear."
-            )
+    # Only predict sleeve for non-pants clothing.
+    sleeve_encoded = classifiers["sleeve"].predict(features)
+    sleeve = encoders["sleeve"].inverse_transform(sleeve_encoded)[0]
+    predictions["sleeve"] = sleeve
+
+    sleeve_phrase = format_sleeve_phrase(sleeve)
+
+    if sleeve_phrase:
+        description = (
+            f"A {sleeve_phrase} {pattern} {silhouette} {garment_type}, "
+            f"suited for {season} wear."
+        )
+    else:
+        description = (
+            f"A {pattern} {silhouette} {garment_type}, "
+            f"suited for {season} wear."
+        )
 
     return description, predictions
 
